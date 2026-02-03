@@ -512,12 +512,13 @@ def main():
     if "processing" not in st.session_state:
         st.session_state.processing = False
 
+    # Logo in top left corner
+    st.image("bitstarz-logo.svg", width=150)
+
     # Centered layout
     col1, center, col2 = st.columns([1, 2, 1])
 
     with center:
-        # Logo
-        st.image("bitstarz-logo.svg", width=250)
         st.markdown("<h2 style='text-align: center; margin-bottom: 1rem;'>Data Matcher</h2>", unsafe_allow_html=True)
 
         # Input sections - compact expanders
