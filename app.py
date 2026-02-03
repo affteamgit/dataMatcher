@@ -488,15 +488,7 @@ def generate_results(matched_list):
 
 
 def main():
-    # Display logo
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.image("bitstarz-logo.svg", width=300)
-
-    st.title("Data Matcher")
-    st.markdown("Match HTML/text content against the database for cryptocurrencies, countries, languages, and game providers.")
-
-    # Check for API credentials
+    # Check for API credentials first
     api_key = get_anthropic_api_key()
     creds = get_google_credentials()
 
@@ -520,32 +512,30 @@ def main():
     if "processing" not in st.session_state:
         st.session_state.processing = False
 
-    # Input sections
-    st.markdown("### Input Data")
-    st.markdown("Paste HTML or text content for each data type you want to match. You can fill one or all sections.")
+    # Centered layout
+    col1, center, col2 = st.columns([1, 2, 1])
 
-    for cat_key, cat_display in CATEGORIES.items():
-        with st.expander(f"{cat_display}", expanded=st.session_state[f"{cat_key}_expanded"]):
-            st.session_state[f"{cat_key}_input"] = st.text_area(
-                f"Paste {cat_display} HTML/text here:",
-                value=st.session_state[f"{cat_key}_input"],
-                height=150,
-                key=f"{cat_key}_textarea",
-                label_visibility="collapsed",
-                placeholder=f"Paste HTML or comma-separated list of {cat_display.lower()}..."
-            )
+    with center:
+        # Logo
+        st.image("bitstarz-logo.svg", width=250)
+        st.markdown("<h2 style='text-align: center; margin-bottom: 1rem;'>Data Matcher</h2>", unsafe_allow_html=True)
 
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                if st.button(f"Clear", key=f"clear_{cat_key}"):
+        # Input sections - compact expanders
+        for cat_key, cat_display in CATEGORIES.items():
+            with st.expander(f"{cat_display}", expanded=st.session_state[f"{cat_key}_expanded"]):
+                st.session_state[f"{cat_key}_input"] = st.text_area(
+                    f"Paste {cat_display} HTML/text here:",
+                    value=st.session_state[f"{cat_key}_input"],
+                    height=80,
+                    key=f"{cat_key}_textarea",
+                    label_visibility="collapsed",
+                    placeholder=f"Paste HTML or comma-separated list..."
+                )
+                if st.button(f"Clear", key=f"clear_{cat_key}", use_container_width=True):
                     st.session_state[f"{cat_key}_input"] = ""
                     st.rerun()
 
-    # Match button
-    st.markdown("---")
-
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col2:
+        st.markdown("")
         match_button = st.button("MATCH", type="primary", use_container_width=True)
 
     if match_button:
@@ -616,20 +606,19 @@ def main():
 
             st.rerun()
 
-    # Display results
+    # Display results (centered)
     if st.session_state.results:
-        st.markdown("---")
-        st.markdown("### Results (Ready to Copy)")
+        col1, center_results, col2 = st.columns([1, 2, 1])
+        with center_results:
+            st.markdown("---")
+            st.markdown("<h4 style='text-align: center;'>Results (Ready to Copy)</h4>", unsafe_allow_html=True)
 
-        for cat_key, cat_display in CATEGORIES.items():
-            if cat_key in st.session_state.results:
-                result_text = st.session_state.results[cat_key]
-                st.markdown(f"**{cat_display}:**")
-                st.code(result_text, language=None)
+            for cat_key, cat_display in CATEGORIES.items():
+                if cat_key in st.session_state.results:
+                    result_text = st.session_state.results[cat_key]
+                    st.markdown(f"**{cat_display}:**")
+                    st.code(result_text, language=None)
 
-        # Clear results button
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col2:
             if st.button("Clear All", use_container_width=True):
                 st.session_state.results = {}
                 for cat in CATEGORIES.keys():
