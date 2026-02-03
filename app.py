@@ -508,7 +508,7 @@ def main():
         if f"{cat}_input" not in st.session_state:
             st.session_state[f"{cat}_input"] = ""
         if f"{cat}_expanded" not in st.session_state:
-            st.session_state[f"{cat}_expanded"] = True
+            st.session_state[f"{cat}_expanded"] = False
 
     if "results" not in st.session_state:
         st.session_state.results = {}
@@ -629,7 +629,7 @@ def main():
                 st.session_state.results = {}
                 for cat in CATEGORIES.keys():
                     st.session_state[f"{cat}_input"] = ""
-                    st.session_state[f"{cat}_expanded"] = True
+                    st.session_state[f"{cat}_expanded"] = False
                 st.rerun()
 
 
