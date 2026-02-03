@@ -41,7 +41,7 @@ def get_anthropic_api_key():
 def get_google_credentials():
     """Get Google credentials from Streamlit secrets"""
     try:
-        creds_dict = st.secrets["gcp_service_account"]
+        creds_dict = st.secrets["service_account"]
         creds = Credentials.from_service_account_info(dict(creds_dict), scopes=SCOPES)
         return creds
     except Exception as e:
@@ -500,7 +500,7 @@ def main():
         st.stop()
 
     if not creds:
-        st.error("Google credentials not found. Please add gcp_service_account to your Streamlit secrets.")
+        st.error("Google credentials not found. Please add service_account to your Streamlit secrets.")
         st.stop()
 
     # Initialize session state for inputs
