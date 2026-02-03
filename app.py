@@ -16,6 +16,49 @@ st.set_page_config(
     layout="wide"
 )
 
+# Force dark theme with custom CSS
+st.markdown("""
+<style>
+    /* Main background */
+    .stApp {
+        background-color: #0e1117;
+    }
+
+    /* Sidebar background */
+    [data-testid="stSidebar"] {
+        background-color: #0e1117;
+    }
+
+    /* Text color */
+    .stApp, .stApp p, .stApp span, .stApp label, .stApp div {
+        color: #fafafa;
+    }
+
+    /* Expander background */
+    [data-testid="stExpander"] {
+        background-color: #262730;
+        border-radius: 8px;
+    }
+
+    /* Text area background */
+    [data-testid="stTextArea"] textarea {
+        background-color: #262730;
+        color: #fafafa;
+    }
+
+    /* Code block background */
+    [data-testid="stCode"] {
+        background-color: #262730;
+    }
+
+    /* Input fields */
+    .stTextInput input, .stSelectbox select {
+        background-color: #262730;
+        color: #fafafa;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Google Sheets Info
 SPREADSHEET_ID = "1ZneRUz90Ne06pr8CCax8vp30tOtPpKJQCw5ikE-uB_0"
 SHEET_NAME = "Lists"
