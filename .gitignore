@@ -1,0 +1,29 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Service account credentials (sensitive)
+service_account*.json
+
+# Input/output files (local testing)
+*_input.html
+matched_elements.csv
+unmatched_elements.csv
+ready_to_copy_*.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

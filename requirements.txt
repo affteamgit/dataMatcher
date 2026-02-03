@@ -1,0 +1,7 @@
+streamlit>=1.28.0
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-api-python-client>=2.100.0
+fuzzywuzzy>=0.18.0
+python-Levenshtein>=0.21.0
+requests>=2.31.0
