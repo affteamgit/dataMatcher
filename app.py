@@ -387,8 +387,10 @@ def load_sheet_data(_creds):
                     variations = row[var_i].split(",")
                     for var in variations:
                         var_clean = clean_term(var)
-                        if var_clean and var_clean.lower() != main_clean.lower() if main_clean else True:
-                            known[var_clean.lower()] = (main, wp_id)
+                        if var_clean:
+                            # Only check for duplicate if main_clean exists
+                            if not main_clean or var_clean.lower() != main_clean.lower():
+                                known[var_clean.lower()] = (main, wp_id)
 
         parsed[cat] = known
     return parsed
