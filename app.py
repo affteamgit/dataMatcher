@@ -488,6 +488,11 @@ def generate_results(matched_list):
 
 
 def main():
+    # Display logo
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.image("bitstarz-logo.svg", width=300)
+
     st.title("Data Matcher")
     st.markdown("Match HTML/text content against the database for cryptocurrencies, countries, languages, and game providers.")
 
