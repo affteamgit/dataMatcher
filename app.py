@@ -1,4 +1,5 @@
 import streamlit as st
+import base64
 import html
 import re
 import time
@@ -104,10 +105,9 @@ def clean_term(term):
     term = re.sub(r'[\"""'']+', "", term)
     term = term.strip()
 
-    term = re.sub(r"\s+(logo|provider|slot|games?|studios?|entertainment|software)$", "", term, flags=re.IGNORECASE)
+    term = re.sub(r"\s+(logo|provider|slot|studios?|entertainment|software)$", "", term, flags=re.IGNORECASE)
     term = re.sub(r"^(game\s+|slot\s+|casino\s+)", "", term, flags=re.IGNORECASE)
     term = re.sub(r"\s*[-–]\s*.*$", "", term)
-    term = re.sub(r"\s+games?$", "", term, flags=re.IGNORECASE)
     term = re.sub(r"\s+", " ", term)
     term = term.strip()
 
@@ -134,17 +134,19 @@ def chunk_html(html_content, chunk_size=8000):
     return chunks
 
 
-def call_claude(prompt, api_key):
-    """Call Claude API with retry logic"""
+def call_claude(content, api_key):
+    """Call Claude API with retry logic. `content` is either a text prompt (str)
+    or a list of content blocks (e.g. images + text) for vision requests."""
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json"
     }
     body = {
-        "model": "claude-sonnet-4-5-20250929",
+        "model": "claude-sonnet-5",
         "max_tokens": 4000,
-        "messages": [{"role": "user", "content": prompt}]
+        "thinking": {"type": "disabled"},
+        "messages": [{"role": "user", "content": content}]
     }
 
     max_retries = 3
@@ -154,7 +156,8 @@ def call_claude(prompt, api_key):
         try:
             response = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body)
             response.raise_for_status()
-            return response.json().get("content", [{}])[0].get("text", "")
+            content_blocks = response.json().get("content", [])
+            return next((block.get("text", "") for block in content_blocks if block.get("type") == "text"), "")
         except requests.exceptions.HTTPError as e:
             if e.response.status_code in [429, 529]:
                 if attempt < max_retries:
@@ -313,6 +316,62 @@ Return each cryptocurrency/payment method on a separate line, nothing else:"""
     return cleaned_terms
 
 
+def extract_terms_from_images(image_files, category, api_key):
+    """Extract terms from screenshot(s) using Claude vision.
+
+    Returns (terms, unreadable_notes) - unreadable_notes are tiles whose logo
+    has no legible name and wasn't confidently identifiable, so they're
+    surfaced for manual review instead of guessed.
+    """
+    content_blocks = []
+    for image_file in image_files:
+        media_type = image_file.type or "image/png"
+        image_b64 = base64.standard_b64encode(image_file.getvalue()).decode("utf-8")
+        content_blocks.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": image_b64}
+        })
+
+    label = CATEGORIES[category].lower()
+    prompt = f"""These screenshot(s) show a grid or list of {label} logos/icons from a casino website.
+
+For EACH distinct logo or tile, output exactly one line:
+- If the logo contains a legible brand name or wordmark, output just that name.
+- If the logo is a pure icon/symbol with no legible name and you cannot identify it with high confidence, output: UNREADABLE: <short visual description, e.g. colors and shape>
+
+Do not guess a name for a logo you cannot confidently identify - use the UNREADABLE line instead. Ignore UI elements that aren't {label} (search boxes, navigation, "All"/"All providers" tiles, close buttons, etc.). Output one line per tile, nothing else."""
+
+    content_blocks.append({"type": "text", "text": prompt})
+
+    claude_answer = call_claude(content_blocks, api_key)
+
+    terms = []
+    unreadable = []
+
+    if claude_answer:
+        for line in claude_answer.splitlines():
+            line = line.strip().lstrip("-").strip()
+            if not line:
+                continue
+            if line.upper().startswith("UNREADABLE:"):
+                description = line.split(":", 1)[1].strip().replace(",", ";")
+                unreadable.append(f"Unreadable logo: {description}" if description else "Unreadable logo")
+            else:
+                cleaned = clean_term(line)
+                if cleaned:
+                    terms.append(cleaned)
+
+    seen_lower = set()
+    unique_terms = []
+    for term in terms:
+        term_lower = term.lower()
+        if term_lower not in seen_lower:
+            seen_lower.add(term_lower)
+            unique_terms.append(term)
+
+    return unique_terms, unreadable
+
+
 def process_html_input(html_content, category, api_key, progress_callback=None):
     """Process HTML content using AI extraction or direct parsing"""
 
@@ -434,39 +493,71 @@ def match_elements(category, input_list, known_dict):
 
 
 def ai_match_terms(category, terms, known_dict, api_key):
-    """Use AI to match remaining terms"""
-    PROMPTS = {
-        "country": "From the casino terms: {terms}, which ones match these countries or their variations from the spreadsheet Seznami tab: {known}?",
-        "language": "Which of these languages: {terms} match the languages from the spreadsheet Seznami tab: {known}?",
-        "crypto": "Identify which terms in: {terms} match the cryptocurrency names or variations from the spreadsheet Seznami tab: {known}.",
-        "provider": "Match game providers in: {terms} to the game providers and their variations in the spreadsheet Seznami tab: {known}."
+    """Use AI to match remaining terms against the full known list"""
+    LABELS = {
+        "country": "countries",
+        "language": "languages",
+        "crypto": "cryptocurrencies",
+        "provider": "game providers"
     }
 
-    seen = set()
-    known_sample = ", ".join(list(known_dict.keys())[:100])
-    input_text = ", ".join(terms)
-    prompt = PROMPTS[category].format(terms=input_text, known=known_sample)
+    # Build the canonical name list (deduped) and a name -> WP ID lookup
+    name_to_wpid = {}
+    for main, wp_id in known_dict.values():
+        name_to_wpid.setdefault(main, wp_id)
+    known_names = sorted(name_to_wpid.keys())
+    known_lower_to_name = {name.lower(): name for name in known_names}
+
+    input_lines = "\n".join(f"- {term}" for term in terms)
+    known_text = ", ".join(known_names)
+
+    prompt = f"""You are matching casino industry terms to a known list of {LABELS[category]}.
+
+Input terms (may be misspelled, abbreviated, or formatted differently):
+{input_lines}
+
+Known list of correct {LABELS[category]} names:
+{known_text}
+
+For EACH input term above, respond with exactly one line in this format:
+<input term> => <matching name from the known list>
+
+If an input term does not match anything in the known list, respond with:
+<input term> => NONE
+
+Use the exact spelling from the known list on the right side. Do not invent names that aren't in the list. Respond with nothing else."""
 
     claude_answer = call_claude(prompt, api_key)
 
     matched_terms = []
     results = []
 
-    for term in terms:
-        term_lc = term.lower()
-        if term_lc in seen:
-            continue
-        if re.search(rf"\b{re.escape(term)}\b", claude_answer, re.IGNORECASE):
-            if term_lc in known_dict:
-                best_match = known_dict[term_lc]
+    if claude_answer:
+        for line in claude_answer.splitlines():
+            if "=>" not in line:
+                continue
+            left, _, right = line.partition("=>")
+            left = left.strip().lstrip("-").strip()
+            right = right.strip()
+
+            term = next((t for t in terms if t.lower() == left.lower()), None)
+            if not term or term in matched_terms or not right or right.upper() == "NONE":
+                continue
+
+            canonical = known_lower_to_name.get(right.lower())
+            if not canonical:
+                fuzzy = process.extractOne(right, known_names, scorer=fuzz.token_sort_ratio)
+                if fuzzy and fuzzy[1] >= 90:
+                    canonical = fuzzy[0]
+
+            if canonical:
                 results.append({
                     "Element Type": category,
                     "Detected Term": term,
-                    "Matched To": best_match[0],
-                    "WP ID": best_match[1],
+                    "Matched To": canonical,
+                    "WP ID": name_to_wpid.get(canonical, ""),
                     "Matched By": "AI"
                 })
-                seen.add(term_lc)
                 matched_terms.append(term)
 
     unmatched = [t for t in terms if t not in matched_terms]
@@ -551,9 +642,15 @@ def main():
             st.session_state[f"{cat}_input"] = ""
         if f"{cat}_expanded" not in st.session_state:
             st.session_state[f"{cat}_expanded"] = False
+        if f"{cat}_uploader_version" not in st.session_state:
+            st.session_state[f"{cat}_uploader_version"] = 0
 
     if "results" not in st.session_state:
         st.session_state.results = {}
+    if "unmatched" not in st.session_state:
+        st.session_state.unmatched = {}
+    if "ai_matches" not in st.session_state:
+        st.session_state.ai_matches = {}
     if "processing" not in st.session_state:
         st.session_state.processing = False
 
@@ -567,6 +664,7 @@ def main():
         st.markdown("<h2 style='text-align: center; margin-bottom: 1rem;'>Data Matcher</h2>", unsafe_allow_html=True)
 
         # Input sections - compact expanders
+        category_images = {}
         for cat_key, cat_display in CATEGORIES.items():
             with st.expander(f"{cat_display}", expanded=st.session_state[f"{cat_key}_expanded"]):
                 st.session_state[f"{cat_key}_input"] = st.text_area(
@@ -577,8 +675,15 @@ def main():
                     label_visibility="collapsed",
                     placeholder=f"Paste HTML or comma-separated list..."
                 )
+                category_images[cat_key] = st.file_uploader(
+                    f"Or upload screenshot(s) of {cat_display.lower()} logos/icons",
+                    type=["png", "jpg", "jpeg", "webp"],
+                    accept_multiple_files=True,
+                    key=f"{cat_key}_images_uploader_v{st.session_state[f'{cat_key}_uploader_version']}"
+                )
                 if st.button(f"Clear", key=f"clear_{cat_key}", use_container_width=True):
                     st.session_state[f"{cat_key}_input"] = ""
+                    st.session_state[f"{cat_key}_uploader_version"] += 1
                     st.rerun()
 
         st.markdown("")
@@ -586,13 +691,18 @@ def main():
 
     if match_button:
         # Check if any input provided
-        has_input = any(st.session_state[f"{cat}_input"].strip() for cat in CATEGORIES.keys())
+        has_input = any(
+            st.session_state[f"{cat}_input"].strip() or category_images.get(cat)
+            for cat in CATEGORIES.keys()
+        )
 
         if not has_input:
             st.warning("Please provide input for at least one category.")
         else:
             st.session_state.processing = True
             st.session_state.results = {}
+            st.session_state.unmatched = {}
+            st.session_state.ai_matches = {}
 
             # Load sheet data
             with st.spinner("Loading database..."):
@@ -604,13 +714,15 @@ def main():
                     st.stop()
 
             all_matched = []
+            unmatched_terms = {}
             progress_container = st.container()
 
             # Process each category
             for cat_key, cat_display in CATEGORIES.items():
                 input_content = st.session_state[f"{cat_key}_input"].strip()
+                images = category_images.get(cat_key) or []
 
-                if not input_content:
+                if not input_content and not images:
                     continue
 
                 with progress_container:
@@ -622,7 +734,23 @@ def main():
                         def progress_cb(msg):
                             st.write(msg)
 
-                        terms = process_html_input(input_content, cat_key, api_key, progress_cb)
+                        terms = process_html_input(input_content, cat_key, api_key, progress_cb) if input_content else []
+
+                        if images:
+                            st.write(f"Analyzing {len(images)} screenshot(s)...")
+                            image_terms, unreadable_logos = extract_terms_from_images(images, cat_key, api_key)
+
+                            seen_lower = {t.lower() for t in terms}
+                            for term in image_terms:
+                                if term.lower() not in seen_lower:
+                                    terms.append(term)
+                                    seen_lower.add(term.lower())
+
+                            if unreadable_logos:
+                                unmatched_terms.setdefault(cat_key, []).extend(unreadable_logos)
+
+                            st.write(f"Screenshot(s): {len(image_terms)} name(s) read, {len(unreadable_logos)} unreadable logo(s)")
+
                         st.write(f"Found {len(terms)} terms")
 
                         if terms:
@@ -637,12 +765,44 @@ def main():
                                 all_matched.extend(ai_matched)
                                 st.write(f"AI matches: {len(ai_matched)}")
 
+                                if still_unmatched:
+                                    unmatched_terms.setdefault(cat_key, []).extend(still_unmatched)
+
                         status.update(label=f"{cat_display} complete!", state="complete")
 
             # Filter results
+            ai_match_pairs = {}
             if all_matched:
                 verified, rejected = automated_proof_filter(all_matched)
                 st.session_state.results = generate_results(verified)
+
+                for match in verified:
+                    if match["Matched By"] == "AI":
+                        ai_match_pairs.setdefault(match["Element Type"], set()).add(
+                            (match["Detected Term"], match["Matched To"])
+                        )
+
+                for rej in rejected:
+                    unmatched_terms.setdefault(rej["Element Type"], []).append(rej["Detected Term"])
+
+            # Format AI-derived matches for verification (not exact/fuzzy matches against the known list)
+            st.session_state.ai_matches = {}
+            for cat_key, pairs in ai_match_pairs.items():
+                sorted_pairs = sorted(pairs, key=lambda p: p[0].lower())
+                st.session_state.ai_matches[cat_key] = "\n".join(f"{detected} → {matched}" for detected, matched in sorted_pairs)
+
+            # Deduplicate and alphabetize unmatched terms per category
+            st.session_state.unmatched = {}
+            for cat_key, terms_list in unmatched_terms.items():
+                seen_lower = set()
+                unique_terms = []
+                for term in terms_list:
+                    term_lower = term.lower()
+                    if term_lower not in seen_lower:
+                        seen_lower.add(term_lower)
+                        unique_terms.append(term)
+                if unique_terms:
+                    st.session_state.unmatched[cat_key] = ", ".join(sorted(unique_terms, key=str.lower))
 
             st.session_state.processing = False
 
@@ -653,23 +813,52 @@ def main():
             st.rerun()
 
     # Display results (centered)
-    if st.session_state.results:
+    if st.session_state.results or st.session_state.unmatched or st.session_state.ai_matches:
         col1, center_results, col2 = st.columns([1, 2, 1])
         with center_results:
             st.markdown("---")
-            st.markdown("<h4 style='text-align: center;'>Results (Ready to Copy)</h4>", unsafe_allow_html=True)
 
-            for cat_key, cat_display in CATEGORIES.items():
-                if cat_key in st.session_state.results:
-                    result_text = st.session_state.results[cat_key]
-                    st.markdown(f"**{cat_display}:**")
-                    st.code(result_text, language=None)
+            if st.session_state.results:
+                st.markdown("<h4 style='text-align: center;'>Results (Ready to Copy)</h4>", unsafe_allow_html=True)
+
+                for cat_key, cat_display in CATEGORIES.items():
+                    if cat_key in st.session_state.results:
+                        result_text = st.session_state.results[cat_key]
+                        st.markdown(f"**{cat_display}:**")
+                        st.code(result_text, language=None)
+
+            if st.session_state.ai_matches:
+                st.markdown("<h4 style='text-align: center;'>AI-Matched (Please Verify)</h4>", unsafe_allow_html=True)
+                st.markdown(
+                    "<p style='text-align: center; font-size: 0.85rem;'>"
+                    "Matched by AI, not an exact/fuzzy hit against the known list &mdash; already included above. "
+                    "Spot-check these, then add the detected spelling as a variation for the matched entity."
+                    "</p>",
+                    unsafe_allow_html=True
+                )
+
+                for cat_key, cat_display in CATEGORIES.items():
+                    if cat_key in st.session_state.ai_matches:
+                        st.markdown(f"**{cat_display}:**")
+                        st.code(st.session_state.ai_matches[cat_key], language=None)
+
+            if st.session_state.unmatched:
+                st.markdown("<h4 style='text-align: center;'>Unmatched Terms</h4>", unsafe_allow_html=True)
+
+                for cat_key, cat_display in CATEGORIES.items():
+                    if cat_key in st.session_state.unmatched:
+                        unmatched_text = st.session_state.unmatched[cat_key]
+                        st.markdown(f"**{cat_display}:**")
+                        st.code(unmatched_text, language=None)
 
             if st.button("Clear All", use_container_width=True):
                 st.session_state.results = {}
+                st.session_state.unmatched = {}
+                st.session_state.ai_matches = {}
                 for cat in CATEGORIES.keys():
                     st.session_state[f"{cat}_input"] = ""
                     st.session_state[f"{cat}_expanded"] = False
+                    st.session_state[f"{cat}_uploader_version"] += 1
                 st.rerun()
 
 
