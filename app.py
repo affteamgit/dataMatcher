@@ -638,8 +638,8 @@ def main():
 
     # Initialize session state for inputs
     for cat in CATEGORIES.keys():
-        if f"{cat}_input" not in st.session_state:
-            st.session_state[f"{cat}_input"] = ""
+        if f"{cat}_textarea" not in st.session_state:
+            st.session_state[f"{cat}_textarea"] = ""
         if f"{cat}_expanded" not in st.session_state:
             st.session_state[f"{cat}_expanded"] = False
         if f"{cat}_uploader_version" not in st.session_state:
@@ -667,9 +667,8 @@ def main():
         category_images = {}
         for cat_key, cat_display in CATEGORIES.items():
             with st.expander(f"{cat_display}", expanded=st.session_state[f"{cat_key}_expanded"]):
-                st.session_state[f"{cat_key}_input"] = st.text_area(
+                st.text_area(
                     f"Paste {cat_display} HTML/text here:",
-                    value=st.session_state[f"{cat_key}_input"],
                     height=80,
                     key=f"{cat_key}_textarea",
                     label_visibility="collapsed",
@@ -682,7 +681,7 @@ def main():
                     key=f"{cat_key}_images_uploader_v{st.session_state[f'{cat_key}_uploader_version']}"
                 )
                 if st.button(f"Clear", key=f"clear_{cat_key}", use_container_width=True):
-                    st.session_state[f"{cat_key}_input"] = ""
+                    st.session_state[f"{cat_key}_textarea"] = ""
                     st.session_state[f"{cat_key}_uploader_version"] += 1
                     st.rerun()
 
@@ -692,7 +691,7 @@ def main():
     if match_button:
         # Check if any input provided
         has_input = any(
-            st.session_state[f"{cat}_input"].strip() or category_images.get(cat)
+            st.session_state[f"{cat}_textarea"].strip() or category_images.get(cat)
             for cat in CATEGORIES.keys()
         )
 
@@ -719,7 +718,7 @@ def main():
 
             # Process each category
             for cat_key, cat_display in CATEGORIES.items():
-                input_content = st.session_state[f"{cat_key}_input"].strip()
+                input_content = st.session_state[f"{cat_key}_textarea"].strip()
                 images = category_images.get(cat_key) or []
 
                 if not input_content and not images:
@@ -856,7 +855,7 @@ def main():
                 st.session_state.unmatched = {}
                 st.session_state.ai_matches = {}
                 for cat in CATEGORIES.keys():
-                    st.session_state[f"{cat}_input"] = ""
+                    st.session_state[f"{cat}_textarea"] = ""
                     st.session_state[f"{cat}_expanded"] = False
                     st.session_state[f"{cat}_uploader_version"] += 1
                 st.rerun()
