@@ -623,6 +623,24 @@ def generate_results(matched_list):
     return results
 
 
+def clear_category_input(cat_key):
+    """Reset one category's input. Must run via on_click - session_state for a
+    widget's own key can't be set after that widget has rendered this run."""
+    st.session_state[f"{cat_key}_textarea"] = ""
+    st.session_state[f"{cat_key}_uploader_version"] += 1
+
+
+def clear_all_results():
+    """Reset all results and inputs. Must run via on_click (see clear_category_input)."""
+    st.session_state.results = {}
+    st.session_state.unmatched = {}
+    st.session_state.ai_matches = {}
+    for cat in CATEGORIES.keys():
+        st.session_state[f"{cat}_textarea"] = ""
+        st.session_state[f"{cat}_expanded"] = False
+        st.session_state[f"{cat}_uploader_version"] += 1
+
+
 def main():
     # Check for API credentials first
     api_key = get_anthropic_api_key()
@@ -680,10 +698,10 @@ def main():
                     accept_multiple_files=True,
                     key=f"{cat_key}_images_uploader_v{st.session_state[f'{cat_key}_uploader_version']}"
                 )
-                if st.button(f"Clear", key=f"clear_{cat_key}", use_container_width=True):
-                    st.session_state[f"{cat_key}_textarea"] = ""
-                    st.session_state[f"{cat_key}_uploader_version"] += 1
-                    st.rerun()
+                st.button(
+                    f"Clear", key=f"clear_{cat_key}", use_container_width=True,
+                    on_click=clear_category_input, args=(cat_key,)
+                )
 
         st.markdown("")
         match_button = st.button("MATCH", type="primary", use_container_width=True)
@@ -850,15 +868,7 @@ def main():
                         st.markdown(f"**{cat_display}:**")
                         st.code(unmatched_text, language=None)
 
-            if st.button("Clear All", use_container_width=True):
-                st.session_state.results = {}
-                st.session_state.unmatched = {}
-                st.session_state.ai_matches = {}
-                for cat in CATEGORIES.keys():
-                    st.session_state[f"{cat}_textarea"] = ""
-                    st.session_state[f"{cat}_expanded"] = False
-                    st.session_state[f"{cat}_uploader_version"] += 1
-                st.rerun()
+            st.button("Clear All", use_container_width=True, on_click=clear_all_results)
 
 
 if __name__ == "__main__":
