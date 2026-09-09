@@ -73,6 +73,13 @@ CATEGORIES = {
     "provider": "Game Providers"
 }
 
+# FATF "High-Risk Jurisdictions subject to a Call for Action" (the FATF blacklist).
+# Casinos often write "FATF blacklisted countries" instead of naming them. Update
+# this list by hand whenever FATF revises it (see fatf-gafi.org) - last checked 2026.
+FATF_BLACKLIST_COUNTRIES = ["Iran", "North Korea", "Myanmar"]
+
+FATF_MENTION_RE = re.compile(r"\bfatf\b", re.IGNORECASE)
+
 
 def get_anthropic_api_key():
     """Get Anthropic API key from Streamlit secrets"""
@@ -370,6 +377,25 @@ Do not guess a name for a logo you cannot confidently identify - use the UNREADA
             unique_terms.append(term)
 
     return unique_terms, unreadable
+
+
+def expand_fatf_mentions(raw_input, terms):
+    """If a country input mentions FATF (e.g. "FATF blacklisted countries"),
+    drop that mention and expand it into the individual FATF-blacklisted
+    countries so they go through the normal matching pipeline."""
+    mentions_fatf = bool(FATF_MENTION_RE.search(raw_input or "")) or any(
+        FATF_MENTION_RE.search(term) for term in terms
+    )
+    if not mentions_fatf:
+        return terms
+
+    expanded = [term for term in terms if not FATF_MENTION_RE.search(term)]
+    seen_lower = {t.lower() for t in expanded}
+    for country in FATF_BLACKLIST_COUNTRIES:
+        if country.lower() not in seen_lower:
+            expanded.append(country)
+            seen_lower.add(country.lower())
+    return expanded
 
 
 def process_html_input(html_content, category, api_key, progress_callback=None):
@@ -767,6 +793,12 @@ def main():
                                 unmatched_terms.setdefault(cat_key, []).extend(unreadable_logos)
 
                             st.write(f"Screenshot(s): {len(image_terms)} name(s) read, {len(unreadable_logos)} unreadable logo(s)")
+
+                        if cat_key == "country":
+                            expanded_terms = expand_fatf_mentions(input_content, terms)
+                            if len(expanded_terms) != len(terms):
+                                st.write("Detected FATF mention - expanded to individual blacklisted countries")
+                            terms = expanded_terms
 
                         st.write(f"Found {len(terms)} terms")
 
