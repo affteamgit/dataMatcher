@@ -590,6 +590,96 @@ Use the exact spelling from the known list on the right side. Do not invent name
     return results, unmatched
 
 
+def verify_game_studios(terms, api_key, batch_size=15):
+    """Check which unmatched provider terms are real casino game development
+    studios (vs. game categories/labels a casino put in its provider list).
+    Uses Claude with web search so lesser-known studios can be confirmed via
+    their own website. Returns {term_lower: website_url_or_empty} for terms
+    confirmed as real studios."""
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
+    studios = {}
+
+    for i in range(0, len(terms), batch_size):
+        batch = terms[i:i + batch_size]
+        input_lines = "\n".join(f"- {term}" for term in batch)
+        prompt = f"""A casino website listed the following entries in its "game providers" filter. Some are real casino game development studios (companies that build slots, table games, live casino, crash games, etc.). Others are not studios at all - they're game categories, themes, features or labels the casino dropped into the list (e.g. "Megaways", "Jackpots", "Buy Bonus", "New Games", "Crash Games", "Live Casino").
+
+Entries:
+{input_lines}
+
+For each entry, decide whether it is a real game development studio. Use your own knowledge for well-known studios; use web search for anything you aren't sure about - a real studio typically has its own website describing its games/portfolio, or is listed as a game developer on casino industry sites. Be strict: only mark STUDIO when you're confident it's an actual company that develops casino games.
+
+After any research, respond with exactly one line per entry, in this format and nothing else:
+<entry> => STUDIO | <studio's official website URL, or blank if unknown>
+<entry> => NOT"""
+
+        messages = [{"role": "user", "content": prompt}]
+        body = {
+            "model": "claude-sonnet-5",
+            "max_tokens": 4000,
+            "thinking": {"type": "disabled"},
+            "tools": [{"type": "web_search_20260209", "name": "web_search", "max_uses": len(batch) * 2}],
+            "messages": messages
+        }
+
+        answer_text = ""
+        try:
+            # Server-side web search can pause long turns; resend to resume.
+            for _ in range(5):
+                response = None
+                for attempt in range(4):
+                    response = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=body, timeout=300)
+                    if response.status_code in [429, 529] and attempt < 3:
+                        time.sleep(2 ** attempt + random.uniform(0, 1))
+                        continue
+                    break
+                response.raise_for_status()
+                data = response.json()
+                content_blocks = data.get("content", [])
+                answer_text += "\n" + "\n".join(b.get("text", "") for b in content_blocks if b.get("type") == "text")
+                if data.get("stop_reason") != "pause_turn":
+                    break
+                body["messages"] = messages + [{"role": "assistant", "content": content_blocks}]
+        except Exception:
+            continue
+
+        for line in answer_text.splitlines():
+            if "=>" not in line:
+                continue
+            left, _, right = line.partition("=>")
+            left = left.strip().lstrip("-").strip()
+            verdict, _, url = right.partition("|")
+            term = next((t for t in batch if t.lower() == left.lower()), None)
+            if term and verdict.strip().upper() == "STUDIO":
+                studios[term.lower()] = url.strip()
+
+    return studios
+
+
+def render_unmatched_providers(unmatched_text, verified_studios):
+    """Render the unmatched provider list as a code-style block with confirmed
+    game studios highlighted in green (hover shows the studio's website)."""
+    parts = []
+    for term in unmatched_text.split(", "):
+        escaped = html.escape(term)
+        if term.lower() in verified_studios:
+            url = verified_studios[term.lower()]
+            tooltip = html.escape(f"Verified game studio{': ' + url if url else ''}", quote=True)
+            parts.append(f"<span style='color:#3ddc84;font-weight:600;' title=\"{tooltip}\">{escaped}</span>")
+        else:
+            parts.append(escaped)
+    st.markdown(
+        "<div style='background-color:#262730;border-radius:8px;padding:0.75rem 1rem;"
+        "font-family:monospace;font-size:0.85rem;line-height:1.6;margin-bottom:1rem;'>"
+        + ", ".join(parts) + "</div>",
+        unsafe_allow_html=True
+    )
+
+
 def automated_proof_filter(matched_list):
     """Apply automated filters to reduce false positives"""
     auto_approved = []
@@ -661,6 +751,7 @@ def clear_all_results():
     st.session_state.results = {}
     st.session_state.unmatched = {}
     st.session_state.ai_matches = {}
+    st.session_state.verified_studios = {}
     for cat in CATEGORIES.keys():
         st.session_state[f"{cat}_textarea"] = ""
         st.session_state[f"{cat}_expanded"] = False
@@ -695,6 +786,8 @@ def main():
         st.session_state.unmatched = {}
     if "ai_matches" not in st.session_state:
         st.session_state.ai_matches = {}
+    if "verified_studios" not in st.session_state:
+        st.session_state.verified_studios = {}
     if "processing" not in st.session_state:
         st.session_state.processing = False
 
@@ -746,6 +839,7 @@ def main():
             st.session_state.results = {}
             st.session_state.unmatched = {}
             st.session_state.ai_matches = {}
+            st.session_state.verified_studios = {}
 
             # Load sheet data
             with st.spinner("Loading database..."):
@@ -853,6 +947,15 @@ def main():
                 if unique_terms:
                     st.session_state.unmatched[cat_key] = ", ".join(sorted(unique_terms, key=str.lower))
 
+            # Check which unmatched providers are real game studios (skip unreadable-logo notes)
+            provider_candidates = [
+                t for t in st.session_state.unmatched.get("provider", "").split(", ")
+                if t and not t.startswith("Unreadable logo")
+            ]
+            if provider_candidates:
+                with st.spinner(f"Checking {len(provider_candidates)} unmatched provider(s) for real game studios..."):
+                    st.session_state.verified_studios = verify_game_studios(provider_candidates, api_key)
+
             st.session_state.processing = False
 
             # Collapse input sections after processing
@@ -898,7 +1001,12 @@ def main():
                     if cat_key in st.session_state.unmatched:
                         unmatched_text = st.session_state.unmatched[cat_key]
                         st.markdown(f"**{cat_display}:**")
-                        st.code(unmatched_text, language=None)
+                        if cat_key == "provider":
+                            if st.session_state.verified_studios:
+                                st.caption("Names in green are verified game studios - consider adding them to the list.")
+                            render_unmatched_providers(unmatched_text, st.session_state.verified_studios)
+                        else:
+                            st.code(unmatched_text, language=None)
 
             st.button("Clear All", use_container_width=True, on_click=clear_all_results)
 
